@@ -1,16 +1,12 @@
+:Author: Jérôme Kieffer
+:Date: 27/10/2015
+:Keywords: Cookbook
+:Target: Scientists
+
 Azimuthal integration using the graphical user interface
 ========================================================
 
-Author: Jérôme Kieffer
-
-Date: 20/01/2015
-
-Keywords: Integration
-
-Target: Scientists
-
-Associated video:
-  http://www.edna-site.org/pub/calibration/integration.flv
+`Associated video <http://www.edna-site.org/pub/calibration/integration.flv>`_
 
 Look at your integrated patterns
 --------------------------------

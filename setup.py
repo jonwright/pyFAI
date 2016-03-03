@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 #    Project: Fast Azimuthal integration
-#             https://github.com/kif/pyFAI
+#             https://github.com/pyFAI/pyFAI
 #
 #    Copyright (C) European Synchrotron Radiation Facility, Grenoble, France
 #
@@ -30,11 +30,13 @@ __author__ = "Jerome Kieffer"
 __contact__ = "Jerome.Kieffer@ESRF.eu"
 __license__ = "GPLv3+"
 __copyright__ = "European Synchrotron Radiation Facility, Grenoble, France"
-__date__ = "07/04/2015"
+__date__ = "02/02/2016"
 __status__ = "stable"
 
+install_warning = True
 
 import os
+import time
 import sys
 import glob
 import shutil
@@ -48,15 +50,19 @@ try:
     from setuptools.command.sdist import sdist
     from setuptools.command.build_ext import build_ext
     from setuptools.command.install_data import install_data
+    from setuptools.command.install import install
+    from setuptools.command.build_py import build_py as _build_py
 except ImportError:
     from distutils.core import setup, Command
-    from distutils.core import Extension
     from distutils.command.sdist import sdist
     from distutils.command.build_ext import build_ext
     from distutils.command.install_data import install_data
-
+    from distutils.command.install import install
+    from distutils.command.build_py import build_py as _build_py
 from numpy.distutils.core import Extension as _Extension
 
+
+PROJECT = "pyFAI"
 
 ################################################################################
 # Remove MANIFEST file ... it needs to be re-generated on the fly
@@ -106,7 +112,7 @@ def check_cython():
     except ImportError:
         return False
     else:
-        if Cython.Compiler.Version.version < "0.17":
+        if Cython.Compiler.Version.version < "0.21":
             return False
     return True
 
@@ -139,111 +145,79 @@ def check_openmp():
             return False
     return True
 
-CYTHON = check_cython()
-openmp = "openmp" if check_openmp() else ""
+
+USE_OPENMP = "openmp" if check_openmp() else ""
+USE_CYTHON = check_cython()
+if USE_CYTHON:
+    from Cython.Build import cythonize
 
 
-def Extension(name, source=None, extra_sources=None, **kwargs):
+def Extension(name, source=None, can_use_openmp=False, extra_sources=None, **kwargs):
     """
     Wrapper for distutils' Extension
     """
+    if name.startswith("pyFAI.ext."):
+        name = name[10:]
     if source is None:
         source = name
-    cython_c_ext = ".pyx" if CYTHON else ".c"
-    sources = [os.path.join("src", source + cython_c_ext)]
+    cython_c_ext = ".pyx" if USE_CYTHON else ".c"
+    sources = [os.path.join(PROJECT, "ext", source + cython_c_ext)]
     if extra_sources:
         sources.extend(extra_sources)
     if "include_dirs" in kwargs:
         include_dirs = set(kwargs.pop("include_dirs"))
         include_dirs.add(numpy.get_include())
-        include_dirs.add("src")
+        include_dirs.add(os.path.join(PROJECT, "ext"))
         include_dirs = list(include_dirs)
     else:
-        include_dirs = ["src", numpy.get_include()]
-    return _Extension(name=name, sources=sources, include_dirs=include_dirs, **kwargs)
+        include_dirs = [os.path.join(PROJECT, "ext"), numpy.get_include()]
+
+    if can_use_openmp and USE_OPENMP:
+        extra_compile_args = set(kwargs.pop("extra_compile_args", []))
+        extra_compile_args.add(USE_OPENMP)
+        kwargs["extra_compile_args"] = list(extra_compile_args)
+
+        extra_link_args = set(kwargs.pop("extra_link_args", []))
+        extra_link_args.add(USE_OPENMP)
+        kwargs["extra_link_args"] = list(extra_link_args)
+
+    ext = _Extension(name="pyFAI.ext." + name, sources=sources, include_dirs=include_dirs, **kwargs)
+
+    if USE_CYTHON:
+        cext = cythonize([ext], compile_time_env={"HAVE_OPENMP": bool(USE_OPENMP)})
+        if cext:
+            ext = cext[0]
+    return ext
 
 ext_modules = [
-    Extension("_geometry",
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension("reconstruct",
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
+    Extension("_geometry", can_use_openmp=True),
+    Extension("reconstruct", can_use_openmp=True),
     Extension('splitPixel'),
-
     Extension('splitPixelFull'),
-
     Extension('splitPixelFullLUT'),
-
     Extension('splitPixelFullLUT_double'),
-
     Extension('splitBBox'),
-
-    Extension('splitBBoxLUT',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension('splitBBoxCSR',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-    Extension('splitPixelFullCSR',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
+    Extension('histogram', can_use_openmp=True),
+    Extension('splitBBoxLUT', can_use_openmp=True),
+    Extension('splitBBoxCSR', can_use_openmp=True),
+    Extension('splitPixelFullCSR', can_use_openmp=True),
     Extension('relabel'),
-
-    Extension("bilinear",
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension('_distortion',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension('_distortionCSR',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension('_bispev',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
-    Extension('_convolution',
-              extra_compile_args=[openmp],
-              extra_link_args=[openmp]),
-
+    Extension("bilinear", can_use_openmp=True),
+    Extension('_distortion', can_use_openmp=True),
+    Extension('_distortionCSR', can_use_openmp=True),
+    Extension('_bispev', can_use_openmp=True),
+    Extension('_convolution', can_use_openmp=True),
     Extension('_blob'),
-
     Extension('morphology'),
-
     Extension('marchingsquares'),
-
-    Extension('watershed',
-#             extra_compile_args=[openmp], extra_link_args=[openmp],
-              )
-
+    Extension('watershed'),
+    Extension('_tree')
 ]
 
 if (os.name == "posix") and ("x86" in platform.machine()):
     ext_modules.append(
-        Extension('fastcrc', extra_sources=[os.path.join("src", "crc32.c")])
+        Extension('fastcrc', extra_sources=[os.path.join(PROJECT, "ext", "src", "crc32.c")])
     )
-
-if openmp == "openmp":
-    copy('histogram_omp.pyx', 'histogram.pyx', "src")
-    copy('histogram_omp.c', 'histogram.c', "src")
-    ext_modules.append(Extension('histogram',
-                                 extra_compile_args=[openmp],
-                                 extra_link_args=[openmp]))
-else:
-    copy('histogram_nomp.pyx', 'histogram.pyx', "src")
-    copy('histogram_nomp.c', 'histogram.c', "src")
-    ext_modules.append(Extension('histogram'))
-
-if CYTHON:
-    from Cython.Build import cythonize
-    ext_modules = cythonize(ext_modules)
 
 
 class build_ext_pyFAI(build_ext):
@@ -296,7 +270,7 @@ cmdclass['build_ext'] = build_ext_pyFAI
 # ############################# #
 def download_images():
     """
-    Download all test images and  
+    Download all test images and
     """
     test_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test")
     sys.path.insert(0, test_dir)
@@ -304,7 +278,7 @@ def download_images():
     UtilsTest.download_images()
     return list(UtilsTest.ALL_DOWNLOADED_FILES)
 
-installDir = "pyFAI"
+installDir = PROJECT
 
 data_files = [(os.path.join(installDir, "openCL"), glob.glob("openCL/*.cl")),
               (os.path.join(installDir, "gui"), glob.glob("gui/*.ui")),
@@ -394,8 +368,8 @@ class sdist_debian(sdist):
         for rm in to_remove:
             self.filelist.exclude_pattern(pattern="*", anchor=False, prefix=rm)
         # this is for Cython files specifically
-        self.filelist.exclude_pattern(pattern="*.html", anchor=True, prefix="src")
-        for pyxf in glob.glob("src/*.pyx"):
+        self.filelist.exclude_pattern(pattern="*.html", anchor=True, prefix="pyFAI/ext")
+        for pyxf in glob.glob("pyFAI/ext/*.pyx"):
             cf = os.path.splitext(pyxf)[0] + ".c"
             if os.path.isfile(cf):
                 self.filelist.exclude_pattern(pattern=cf)
@@ -438,12 +412,9 @@ class PyTest(Command):
         pass
 
     def run(self):
-        os.chdir("test")
-        errno = subprocess.call([sys.executable, 'test_all.py'])
+        errno = subprocess.call([sys.executable, 'run_tests.py', '-i'])
         if errno != 0:
             raise SystemExit(errno)
-        else:
-            os.chdir("..")
 cmdclass['test'] = PyTest
 
 # ################### #
@@ -471,7 +442,7 @@ if sphinx:
             sys.path.insert(0, os.path.abspath(build.build_lib))
 
             # Copy gui files to the path:
-            dst = os.path.join(os.path.abspath(build.build_lib), "pyFAI", "gui")
+            dst = os.path.join(os.path.abspath(build.build_lib), PROJECT, "gui")
             if not os.path.isdir(dst):
                 os.makedirs(dst)
             for i in os.listdir("gui"):
@@ -491,26 +462,73 @@ if sphinx:
     cmdclass['build_doc'] = build_doc
 
 
-def get_version():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyFAI-src"))
-    import _version
-    sys.path.pop(0)
-    return _version.strictversion
+# ########## #
+# version.py #
+# ########## #
+class build_py(_build_py):
+    """
+    Enhanced build_py which copies version.py to <PROJECT>._version.py
+    """
+    def find_package_modules(self, package, package_dir):
+        modules = _build_py.find_package_modules(self, package, package_dir)
+        if package == PROJECT:
+            modules.append((PROJECT, '_version', 'version.py'))
+        return modules
 
-classifiers = """\
-Development Status :: 5 - Production/Stable
-Intended Audience :: Developers
-Programming Language :: Python
-Topic :: Software Development :: Libraries :: Python Modules
-Operating System :: Microsoft :: Windows
-Operating System :: Unix
-Operating System :: MacOS :: MacOS X
-Operating System :: POSIX
-"""
-problematic = """
-License :: OSI Approved :: GPL
-Topic :: Crystallography
-"""
+
+cmdclass['build_py'] = build_py
+
+if install_warning:
+    class InstallWarning(install):
+        def __init__(self, *arg, **kwarg):
+            print("The usage of 'python setup.py is deprecated. Please use 'pip install .' instead")
+            time.sleep(0.5)
+            install.__init__(self, *arg, **kwarg)
+    cmdclass['install'] = InstallWarning
+
+
+def get_version():
+    import version
+    return version.strictversion
+
+
+def get_readme():
+    dirname = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(dirname, "README.rst"), "r") as fp:
+        long_description = fp.read()
+    return long_description
+
+
+classifiers = ["Development Status :: 5 - Production/Stable",
+               "Intended Audience :: Developers",
+               "Programming Language :: Python :: 2",
+               "Programming Language :: Python :: 3",
+               "Programming Language :: Cython",
+               "Environment :: Console",
+               "Environment :: X11 Applications :: Qt",
+               "Intented Audience :: Science/Research",
+               "License :: OSI Approved :: GNU General Public License (GPL)",
+               "License :: OSI Approved :: MIT License",
+               "Topic :: Software Development :: Libraries :: Python Modules",
+               "Operating System :: Microsoft :: Windows",
+               "Operating System :: Unix",
+               "Operating System :: MacOS :: MacOS X",
+               "Operating System :: POSIX",
+               "Topic :: Scientific/Engineering :: Physics"
+               ]
+
+install_requires = ["numpy", "h5py", "fabio", "matplotlib", "scipy"]
+setup_requires = ["numpy", "cython"]
+
+packages = ["pyFAI", "pyFAI.ext", "pyFAI.test", ]
+package_dir = {"pyFAI": "pyFAI",
+               "pyFAI.ext": "pyFAI/ext",
+               "pyFAI.test": "pyFAI/test"}
+
+if os.path.isdir("third_party"):
+    package_dir["pyFAI.third_party"] = "third_party"
+    packages.append("pyFAI.third_party")
+
 
 if __name__ == "__main__":
     setup(name='pyFAI',
@@ -522,47 +540,19 @@ if __name__ == "__main__":
           and Frederic-Emmanuel Picca",
           author_email="jerome.kieffer@esrf.fr",
           description='Python implementation of fast azimuthal integration',
-          url="https://github.com/kif/pyFAI",
-          download_url="http://forge.epn-campus.eu/projects/azimuthal/files",
-          ext_package="pyFAI",
+          url="https://github.com/pyFAI/pyFAI",
+          download_url="https://github.com/pyFAI/pyFAI/releases",
+          # ext_package="pyFAI.ext",
           scripts=script_files,
           ext_modules=ext_modules,
-          packages=["pyFAI", "pyFAI.third_party", "pyFAI.test"],
-          package_dir={"pyFAI": "pyFAI-src",
-                       "pyFAI.third_party": "third_party",
-                       "pyFAI.test": "test",
-                       },
+          packages=packages,
+          package_dir=package_dir,
           test_suite="test",
           cmdclass=cmdclass,
           data_files=data_files,
-          classifiers=[i for i in classifiers.split("\n") if i],
-          long_description="""PyFAI is an azimuthal integration library that tries to be fast (as fast as C
-    and even more using OpenCL and GPU).
-    It is based on histogramming of the 2theta/Q positions of each (center of)
-    pixel weighted by the intensity of each pixel, but parallel version use a
-    SparseMatrix-DenseVector multiplication.
-    Neighboring output bins get also a contribution of pixels next to the border
-    thanks to pixel splitting.
-    Finally pyFAI provides also tools to calibrate the experimental setup using Debye-Scherrer
-    rings of a reference compound.
-          """,
-          license="GPL"
+          classifiers=classifiers,
+          long_description=get_readme(),
+          license="GPL",
+          install_requires=install_requires,
+          setup_requires=setup_requires,
           )
-
-# ########################################### #
-# Check for Fabio to be present of the system #
-# ########################################### #
-try:
-    import fabio
-except ImportError:
-    print("""pyFAI needs fabIO for all image reading and writing.
-This python module can be found on:
-http://sourceforge.net/projects/fable/files/fabio""")
-
-try:
-    import pyopencl
-except ImportError:
-    print("""pyFAI can use pyopencl to run on parallel accelerators like GPU; this is an optional dependency.
-This python module can be found on:
-http://pypi.python.org/pypi/pyopencl
-""")
